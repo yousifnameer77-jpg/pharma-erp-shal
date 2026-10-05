@@ -27,6 +27,7 @@ class SalesInvoiceService
         private readonly DocumentSequenceService $sequences,
         private readonly StockMovementService $stockMovementService,
         private readonly JournalEntryService $journalEntryService,
+        private readonly ExchangeRateService $fx,
     ) {
     }
 
@@ -36,7 +37,11 @@ class SalesInvoiceService
     public function create(array $data, User $user): SalesInvoice
     {
         return DB::transaction(function () use ($data, $user) {
+            $currency = $data['currency'] ?? ExchangeRateService::BASE;
+
             $invoice = SalesInvoice::create([
+                'currency' => $currency,
+                'exchange_rate' => $this->fx->rateFor($data['company_id'], $currency, $data['invoice_date']),
                 'company_id' => $data['company_id'],
                 'branch_id' => $data['branch_id'],
                 'warehouse_id' => $data['warehouse_id'],
@@ -103,18 +108,25 @@ class SalesInvoiceService
             $totalCost = $this->costOfMovements($allMovements);
             $netRevenue = (float) $invoice->subtotal - (float) $invoice->discount_amount;
 
+            // Ledger is always in IQD: convert each document-currency component
+            // at the invoice rate and derive the receivable from them so the
+            // entry balances exactly despite per-line rounding.
+            $rate = (float) $invoice->exchange_rate;
+            $revenueBase = $this->fx->toBase($netRevenue, $rate);
+            $taxBase = $this->fx->toBase((float) $invoice->tax_amount, $rate);
+
             $lines = [];
             $arAccount = ChartOfAccount::findByCode($invoice->company_id, ChartOfAccount::CODE_ACCOUNTS_RECEIVABLE);
-            $lines[] = ['account_id' => $arAccount->id, 'debit' => (float) $invoice->total_amount, 'description' => 'Accounts receivable'];
+            $lines[] = ['account_id' => $arAccount->id, 'debit' => $revenueBase + $taxBase, 'description' => 'Accounts receivable'];
 
             if ($netRevenue > 0) {
                 $revenueAccount = ChartOfAccount::findByCode($invoice->company_id, ChartOfAccount::CODE_REVENUE);
-                $lines[] = ['account_id' => $revenueAccount->id, 'credit' => $netRevenue, 'description' => 'Sales revenue'];
+                $lines[] = ['account_id' => $revenueAccount->id, 'credit' => $revenueBase, 'description' => 'Sales revenue'];
             }
 
             if ((float) $invoice->tax_amount > 0) {
                 $taxAccount = ChartOfAccount::findByCode($invoice->company_id, ChartOfAccount::CODE_TAX_OUTPUT);
-                $lines[] = ['account_id' => $taxAccount->id, 'credit' => (float) $invoice->tax_amount, 'description' => 'Sales tax payable'];
+                $lines[] = ['account_id' => $taxAccount->id, 'credit' => $taxBase, 'description' => 'Sales tax payable'];
             }
 
             if ($totalCost > 0) {

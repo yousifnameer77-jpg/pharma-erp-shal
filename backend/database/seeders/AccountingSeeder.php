@@ -39,6 +39,7 @@ class AccountingSeeder extends Seeder
             // account so Banks and Expenses both work out of the box.
             ['code' => ChartOfAccount::CODE_BANK, 'name' => 'Main Bank Account', 'type' => 'asset', 'category' => ChartOfAccount::CATEGORY_BANK],
             ['code' => ChartOfAccount::CODE_GENERAL_EXPENSE, 'name' => 'General Expenses', 'type' => 'expense', 'category' => null],
+            ['code' => ChartOfAccount::CODE_FX_GAIN_LOSS, 'name' => 'Foreign Exchange Gain/Loss', 'type' => 'expense', 'category' => null],
         ];
 
         foreach ($accounts as $account) {

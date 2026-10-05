@@ -13,6 +13,7 @@ import { GeneralLedgerTab } from "@/components/accounting/general-ledger-tab";
 import { CashBanksTab } from "@/components/accounting/cash-banks-tab";
 import { ReceivablesPayablesTab } from "@/components/accounting/receivables-payables-tab";
 import { ProfitLossTab } from "@/components/accounting/profit-loss-tab";
+import { ExchangeRatesTab } from "@/components/accounting/exchange-rates-tab";
 import { BalanceSheetTab } from "@/components/accounting/balance-sheet-tab";
 
 const TABS = [
@@ -24,6 +25,7 @@ const TABS = [
   { key: "aging", label: "أعمار الذمم والديون" },
   { key: "pnl", label: "الأرباح والخسائر" },
   { key: "balance", label: "الميزانية العمومية" },
+  { key: "fx", label: "أسعار الصرف (USD)" },
 ];
 
 function AccountingContent({ companyId }: { companyId: string }) {
@@ -44,6 +46,7 @@ function AccountingContent({ companyId }: { companyId: string }) {
       {active === "aging" && <ReceivablesPayablesTab companyId={companyId} />}
       {active === "pnl" && <ProfitLossTab companyId={companyId} />}
       {active === "balance" && <BalanceSheetTab companyId={companyId} />}
+      {active === "fx" && <ExchangeRatesTab companyId={companyId} />}
     </div>
   );
 }

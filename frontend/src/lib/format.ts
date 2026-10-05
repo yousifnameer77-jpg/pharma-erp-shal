@@ -10,6 +10,10 @@ export function toNumber(value: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+export function currencySymbol(c?: string | null) {
+  return c === "USD" ? "$" : "د.ع";
+}
+
 export function formatMoney(
   value: string | number | null | undefined,
   currency = "د.ع",

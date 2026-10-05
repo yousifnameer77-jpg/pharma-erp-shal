@@ -3,128 +3,152 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Models\Customer;
+use App\Models\ChartOfAccount;
 use App\Models\Product;
 use App\Models\PurchaseInvoice;
 use App\Models\SalesInvoice;
-use App\Models\SalesInvoiceItem;
-use App\Models\Stock;
-use App\Models\Supplier;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Executive dashboard. Every figure is computed from real documents and the
+ * general ledger, in IQD (mixed-currency invoices use their *_base columns).
+ * Nothing here is estimated or padded: an empty system shows zeros.
+ */
 class ExecutiveAnalyticsController extends Controller
 {
+    private const REAL_STATUSES = ['posted', 'partially_paid', 'paid'];
+
     public function dashboard(Request $request): JsonResponse
     {
         $user = $request->user();
         $companyId = $user?->branch?->company_id ?? \App\Models\Company::first()?->id ?? 'default';
 
-        $data = Cache::remember('executive_analytics_' . $companyId, 30, function () use ($companyId) {
-            // Total Sales & Paid
-            $totalSales = (float) SalesInvoice::where('company_id', $companyId)
-                ->whereIn('status', ['posted', 'paid', 'partially_paid'])
-                ->sum('total_amount');
+        $data = Cache::remember('executive_analytics_'.$companyId, 30, fn () => $this->compute($companyId));
 
-            $totalPaid = (float) SalesInvoice::where('company_id', $companyId)
-                ->whereIn('status', ['posted', 'paid', 'partially_paid'])
-                ->sum('paid_amount');
+        return response()->json(['status' => 'success', 'data' => $data]);
+    }
 
-            $outstandingReceivables = max(0, $totalSales - $totalPaid);
+    private function compute(string $companyId): array
+    {
+        $sales = SalesInvoice::where('company_id', $companyId)->whereIn('status', self::REAL_STATUSES);
+        $totalSales = (float) (clone $sales)->sum('total_amount_base');
+        $totalPaid = (float) (clone $sales)->sum('paid_amount_base');
 
-            // Purchases & Payables
-            $totalPurchases = (float) PurchaseInvoice::where('company_id', $companyId)
-                ->whereIn('status', ['posted', 'paid', 'partially_paid'])
-                ->sum('total_amount');
+        $purchases = PurchaseInvoice::where('company_id', $companyId)->whereIn('status', self::REAL_STATUSES);
+        $outstandingPayables = max(0, (float) (clone $purchases)->sum('total_amount_base') - (float) (clone $purchases)->sum('paid_amount_base'));
+        $outstandingReceivables = max(0, $totalSales - $totalPaid);
 
-            $totalPurchasesPaid = (float) PurchaseInvoice::where('company_id', $companyId)
-                ->whereIn('status', ['posted', 'paid', 'partially_paid'])
-                ->sum('paid_amount');
+        // Profit comes from the ledger (revenue minus cost of goods sold), not an assumed margin.
+        $ledger = $this->ledgerProfit($companyId);
+        $grossProfit = $ledger['revenue'] - $ledger['cogs'];
+        $profitMargin = $ledger['revenue'] > 0 ? round($grossProfit / $ledger['revenue'] * 100, 1) : 0.0;
 
-            $outstandingPayables = max(0, $totalPurchases - $totalPurchasesPaid);
+        $lowStockCount = Product::query()
+            ->withSum('stockRecords as total_stock_sum', 'quantity_on_hand')
+            ->where('is_active', true)
+            ->get()
+            ->filter(fn (Product $p) => $p->is_below_min_stock)
+            ->count();
 
-            // Approximate Profit Calculation
-            $cogs = (float) SalesInvoiceItem::whereHas('salesInvoice', function ($q) use ($companyId) {
-                $q->where('company_id', $companyId)->whereIn('status', ['posted', 'paid', 'partially_paid']);
-            })
-            ->join('products', 'sales_invoice_items.product_id', '=', 'products.id')
-            ->sum(DB::raw('sales_invoice_items.quantity * COALESCE(products.purchase_price, 0)'));
+        return [
+            'kpis' => [
+                'total_revenue' => $totalSales,
+                'gross_profit' => $grossProfit,
+                'profit_margin' => (float) $profitMargin,
+                'receivables' => $outstandingReceivables,
+                'payables' => $outstandingPayables,
+                'low_stock_count' => $lowStockCount,
+            ],
+            'sales_trend' => $this->trend($companyId),
+            'top_products' => $this->topProducts($companyId),
+            'payment_split' => $this->paymentSplit($totalSales, $totalPaid),
+        ];
+    }
 
-            $grossProfit = max(0, $totalSales - $cogs);
-            $profitMargin = $totalSales > 0 ? round(($grossProfit / $totalSales) * 100, 1) : 24.5;
+    /** @return array{revenue: float, cogs: float} */
+    private function ledgerProfit(string $companyId, ?string $from = null, ?string $to = null): array
+    {
+        $rows = DB::table('journal_entry_lines as l')
+            ->join('journal_entries as e', 'e.id', '=', 'l.journal_entry_id')
+            ->join('chart_of_accounts as a', 'a.id', '=', 'l.account_id')
+            ->where('e.company_id', $companyId)
+            ->whereIn('a.code', [ChartOfAccount::CODE_REVENUE, ChartOfAccount::CODE_COGS])
+            ->when($from, fn ($q) => $q->whereDate('e.entry_date', '>=', $from))
+            ->when($to, fn ($q) => $q->whereDate('e.entry_date', '<=', $to))
+            ->groupBy('a.code')
+            ->selectRaw('a.code, COALESCE(SUM(l.credit), 0) - COALESCE(SUM(l.debit), 0) AS net_credit')
+            ->pluck('net_credit', 'code');
 
-            // 7-day Sales & Profit Trend
-            $trend = [];
-            for ($i = 6; $i >= 0; $i--) {
-                $date = Carbon::today()->subDays($i);
-                $dayName = $date->translatedFormat('D');
-                
-                $daySales = (float) SalesInvoice::where('company_id', $companyId)
-                    ->whereIn('status', ['posted', 'paid', 'partially_paid'])
-                    ->whereDate('invoice_date', $date)
-                    ->sum('total_amount');
+        return [
+            'revenue' => (float) ($rows[ChartOfAccount::CODE_REVENUE] ?? 0),
+            'cogs' => -(float) ($rows[ChartOfAccount::CODE_COGS] ?? 0),
+        ];
+    }
 
-                // Realistic curve based on active products if 0
-                if ($daySales == 0) {
-                    $daySales = (float) (125000 + ($i * 35000) % 180000);
-                }
+    private function trend(string $companyId): array
+    {
+        $trend = [];
 
-                $dayProfit = round($daySales * 0.28, 2);
+        for ($i = 6; $i >= 0; $i--) {
+            $date = Carbon::today()->subDays($i);
 
-                $trend[] = [
-                    'day' => $date->format('M d'),
-                    'day_name' => $dayName,
-                    'sales' => (float) $daySales,
-                    'profit' => (float) $dayProfit,
-                ];
-            }
+            $daySales = (float) SalesInvoice::where('company_id', $companyId)
+                ->whereIn('status', self::REAL_STATUSES)
+                ->whereDate('invoice_date', $date)
+                ->sum('total_amount_base');
 
-            // Top 5 Selling Products
-            $topProducts = Product::where('is_active', true)
-                ->orderBy('sale_price', 'desc')
-                ->limit(5)
-                ->get()
-                ->map(fn(Product $p) => [
-                    'name' => $p->name,
-                    'form' => $p->form,
-                    'sale_price' => (float) $p->sale_price,
-                    'sales_count' => rand(40, 190),
-                    'revenue' => round((float) $p->sale_price * rand(40, 120), 2),
-                ]);
+            $day = $this->ledgerProfit($companyId, $date->toDateString(), $date->toDateString());
 
-            // Payment Method Split (Cash vs Card vs Debt)
-            $paymentSplit = [
-                ['name' => 'نقدي (Cash)', 'value' => 65, 'color' => '#10B981'],
-                ['name' => 'دفع إلكتروني (Card)', 'value' => 20, 'color' => '#06B6D4'],
-                ['name' => 'ذمم وآجل (Credit/Debt)', 'value' => 15, 'color' => '#F59E0B'],
+            $trend[] = [
+                'day' => $date->format('M d'),
+                'day_name' => $date->translatedFormat('D'),
+                'sales' => $daySales,
+                'profit' => $day['revenue'] - $day['cogs'],
             ];
+        }
 
-            // Low stock alerts count
-            $lowStockCount = Product::where('is_active', true)
-                ->where('min_stock_level', '>', 0)
-                ->count();
+        return $trend;
+    }
 
-            return [
-                'kpis' => [
-                    'total_revenue' => (float) max($totalSales, 8450000),
-                    'gross_profit' => (float) max($grossProfit, 2070250),
-                    'profit_margin' => (float) $profitMargin,
-                    'receivables' => (float) max($outstandingReceivables, 1250000),
-                    'payables' => (float) max($outstandingPayables, 3100000),
-                    'low_stock_count' => $lowStockCount > 0 ? $lowStockCount : 3,
-                ],
-                'sales_trend' => $trend,
-                'top_products' => $topProducts,
-                'payment_split' => $paymentSplit,
-            ];
-        });
+    /** Best sellers by actual invoiced revenue (IQD). */
+    private function topProducts(string $companyId): array
+    {
+        return DB::table('sales_invoice_items as i')
+            ->join('sales_invoices as s', 's.id', '=', 'i.sales_invoice_id')
+            ->join('products as p', 'p.id', '=', 'i.product_id')
+            ->where('s.company_id', $companyId)
+            ->whereIn('s.status', self::REAL_STATUSES)
+            ->groupBy('p.id', 'p.name', 'p.form', 'p.sale_price')
+            ->orderByRaw('SUM(i.line_total * s.exchange_rate) DESC')
+            ->limit(5)
+            ->selectRaw('p.name, p.form, p.sale_price, COUNT(DISTINCT s.id) AS sales_count, ROUND(SUM(i.line_total * s.exchange_rate), 2) AS revenue')
+            ->get()
+            ->map(fn ($r) => [
+                'name' => $r->name,
+                'form' => $r->form,
+                'sale_price' => (float) $r->sale_price,
+                'sales_count' => (int) $r->sales_count,
+                'revenue' => (float) $r->revenue,
+            ])
+            ->all();
+    }
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $data,
-        ]);
+    /** Share of invoiced value already collected vs still owed. */
+    private function paymentSplit(float $totalSales, float $totalPaid): array
+    {
+        if ($totalSales <= 0) {
+            return [];
+        }
+
+        $collected = round(min($totalPaid, $totalSales) / $totalSales * 100, 1);
+
+        return [
+            ['name' => 'محصّل (Collected)', 'value' => $collected, 'color' => '#10B981'],
+            ['name' => 'آجل / ذمم (Outstanding)', 'value' => round(100 - $collected, 1), 'color' => '#F59E0B'],
+        ];
     }
 }

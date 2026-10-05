@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { usePaginatedResource, useSimpleList } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth-context";
 import { PERMISSIONS } from "@/lib/permissions";
-import { formatDate, formatMoney, todayIso } from "@/lib/format";
+import { formatDate, formatMoney, currencySymbol, todayIso } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/table";
 import { Pagination } from "@/components/ui/pagination";
@@ -101,13 +101,13 @@ export function PurchaseInvoicesTab({ companyId }: { companyId: string }) {
     {
       key: "total",
       header: "Total",
-      render: (i) => formatMoney(i.total_amount),
+      render: (i) => formatMoney(i.total_amount, currencySymbol((i as any).currency)),
       className: "text-right",
     },
     {
       key: "due",
       header: "Remaining",
-      render: (i) => formatMoney(i.remaining_due),
+      render: (i) => formatMoney(i.remaining_due, currencySymbol((i as any).currency)),
       className: "text-right",
     },
     {
@@ -217,7 +217,7 @@ export function PurchaseInvoicesTab({ companyId }: { companyId: string }) {
             <DetailRow label="Tax" value={formatMoney(selected.tax_amount)} />
             <DetailRow
               label="Total"
-              value={formatMoney(selected.total_amount)}
+              value={formatMoney(selected.total_amount, currencySymbol((selected as any).currency))}
             />
             <DetailRow label="Paid" value={formatMoney(selected.paid_amount)} />
             <DetailRow
@@ -301,6 +301,7 @@ function InvoiceFormModal({
     invoice?.invoice_date ?? todayIso(),
   );
   const [dueDate, setDueDate] = useState(invoice?.due_date ?? "");
+  const [currency, setCurrency] = useState<string>((invoice as any)?.currency ?? "IQD");
   const [notes, setNotes] = useState(invoice?.notes ?? "");
   const [items, setItems] = useState<DraftItem[]>(
     invoice?.items?.map((i) => ({
@@ -339,6 +340,7 @@ function InvoiceFormModal({
           supplier_id: supplierId,
           supplier_invoice_number: supplierInvoiceNumber || undefined,
           invoice_date: invoiceDate,
+          currency,
           due_date: dueDate || undefined,
           notes: notes || undefined,
           items: itemsPayload,
@@ -402,6 +404,15 @@ function InvoiceFormModal({
           value={invoiceDate}
           onChange={(e) => setInvoiceDate(e.target.value)}
         />
+        <Select
+          label="العملة / Currency"
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+          disabled={isEdit}
+        >
+          <option value="IQD">دينار عراقي (IQD)</option>
+          <option value="USD">دولار (USD) — بسعر اليوم</option>
+        </Select>
         <Input
           label="Due date"
           type="date"

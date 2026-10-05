@@ -21,13 +21,16 @@ class CustomerAccountService
         $invoiceTotals = SalesInvoice::query()
             ->where('customer_id', $customer->id)
             ->whereIn('status', ['posted', 'partially_paid', 'paid'])
-            ->selectRaw('COALESCE(SUM(total_amount), 0) AS total_invoiced, COALESCE(SUM(paid_amount), 0) AS total_paid')
+            ->selectRaw('COALESCE(SUM(total_amount_base), 0) AS total_invoiced, COALESCE(SUM(paid_amount_base), 0) AS total_paid')
             ->first();
 
+        // Returns are in the original invoice's currency; convert at its rate.
         $totalReturned = (float) SalesReturn::query()
-            ->where('customer_id', $customer->id)
-            ->where('status', 'posted')
-            ->sum('total_amount');
+            ->leftJoin('sales_invoices', 'sales_invoices.id', '=', 'sales_returns.sales_invoice_id')
+            ->where('sales_returns.customer_id', $customer->id)
+            ->where('sales_returns.status', 'posted')
+            ->selectRaw('COALESCE(SUM(sales_returns.total_amount * COALESCE(sales_invoices.exchange_rate, 1)), 0) AS total')
+            ->value('total');
 
         $totalInvoiced = (float) $invoiceTotals->total_invoiced;
         $totalPaid = (float) $invoiceTotals->total_paid;

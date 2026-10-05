@@ -34,6 +34,8 @@ class ChartOfAccount extends Model
 
     public const CODE_GENERAL_EXPENSE = 'EXPENSE';
 
+    public const CODE_FX_GAIN_LOSS = 'FX_GAIN_LOSS';
+
     /**
      * Optional finer grouping within `type = asset`/`liability`, used only to
      * pick out accounts for the Cash / Banks / Receivables / Payables views

@@ -22,6 +22,7 @@ class CustomerPaymentService
     public function __construct(
         private readonly DocumentSequenceService $sequences,
         private readonly JournalEntryService $journalEntryService,
+        private readonly ExchangeRateService $fx,
     ) {
     }
 
@@ -31,9 +32,11 @@ class CustomerPaymentService
     public function record(array $data, User $user): CustomerPayment
     {
         $amount = (float) $data['amount'];
+        $currency = $data['currency'] ?? ExchangeRateService::BASE;
+        $rate = $this->fx->rateFor($data['company_id'], $currency, $data['payment_date']);
 
-        return DB::transaction(function () use ($data, $amount, $user) {
-            $allocations = $data['allocations'] ?? $this->autoAllocate($data['company_id'], $data['customer_id'], $amount);
+        return DB::transaction(function () use ($data, $amount, $user, $currency, $rate) {
+            $allocations = $data['allocations'] ?? $this->autoAllocate($data['company_id'], $data['customer_id'], $amount, $currency);
 
             $allocatedTotal = round(array_sum(array_map(fn ($a) => (float) $a['amount'], $allocations)), 3);
             if (abs($allocatedTotal - round($amount, 3)) > 0.001) {
@@ -45,6 +48,8 @@ class CustomerPaymentService
             $payment = CustomerPayment::create([
                 'company_id' => $data['company_id'],
                 'customer_id' => $data['customer_id'],
+                'currency' => $currency,
+                'exchange_rate' => $rate,
                 'payment_number' => $this->sequences->next($data['company_id'], 'customer_payment', 'RCT'),
                 'payment_date' => $data['payment_date'],
                 'amount' => $amount,
@@ -55,8 +60,16 @@ class CustomerPaymentService
                 'created_by' => $user->id,
             ]);
 
+            $receivableBase = 0.0;
+
             foreach ($allocations as $allocation) {
                 $invoice = SalesInvoice::whereKey($allocation['sales_invoice_id'])->lockForUpdate()->firstOrFail();
+
+                if ($invoice->currency !== $currency) {
+                    throw ValidationException::withMessages([
+                        'currency' => ["Invoice {$invoice->invoice_number} is in {$invoice->currency}; a {$currency} payment cannot be applied to it."],
+                    ]);
+                }
 
                 if (! in_array($invoice->status, ['posted', 'partially_paid'], true)) {
                     throw new InvalidStatusTransitionException('sales_invoice', $invoice->id, $invoice->status, 'paid');
@@ -74,6 +87,9 @@ class CustomerPaymentService
                     'amount' => $allocatedAmount,
                 ]);
 
+                // Receivable is cleared at the rate the invoice was booked at.
+                $receivableBase += $this->fx->toBase($allocatedAmount, (float) $invoice->exchange_rate);
+
                 $newPaidAmount = (float) $invoice->paid_amount + $allocatedAmount;
                 $invoice->update([
                     'paid_amount' => $newPaidAmount,
@@ -82,16 +98,28 @@ class CustomerPaymentService
             }
 
             $receivableAccount = ChartOfAccount::findByCode($data['company_id'], ChartOfAccount::CODE_ACCOUNTS_RECEIVABLE);
+            $receivedBase = $this->fx->toBase($amount, $rate);
+            $difference = round($receivedBase - $receivableBase, 3);
+
+            $lines = [
+                ['account_id' => $data['received_into_account_id'], 'debit' => $receivedBase, 'description' => 'Received'],
+                ['account_id' => $receivableAccount->id, 'credit' => $receivableBase, 'description' => 'Accounts receivable settled'],
+            ];
+
+            // Collected more IQD than the receivable carried = gain; less = loss.
+            if ($difference !== 0.0) {
+                $fxAccount = $this->fx->gainLossAccount($data['company_id']);
+                $lines[] = $difference > 0
+                    ? ['account_id' => $fxAccount->id, 'credit' => $difference, 'description' => 'Realized exchange gain']
+                    : ['account_id' => $fxAccount->id, 'debit' => -$difference, 'description' => 'Realized exchange loss'];
+            }
 
             $this->journalEntryService->post(
                 companyId: $data['company_id'],
                 branchId: null,
                 entryDate: $data['payment_date'],
                 description: "Customer payment {$payment->payment_number}",
-                lines: [
-                    ['account_id' => $data['received_into_account_id'], 'debit' => $amount, 'description' => 'Received'],
-                    ['account_id' => $receivableAccount->id, 'credit' => $amount, 'description' => 'Accounts receivable settled'],
-                ],
+                lines: $lines,
                 user: $user,
                 referenceType: 'customer_payment',
                 referenceId: $payment->id,
@@ -109,11 +137,12 @@ class CustomerPaymentService
      *
      * @return array<int, array{sales_invoice_id: string, amount: float}>
      */
-    private function autoAllocate(string $companyId, string $customerId, float $amount): array
+    private function autoAllocate(string $companyId, string $customerId, float $amount, string $currency): array
     {
         $invoices = SalesInvoice::query()
             ->where('company_id', $companyId)
             ->where('customer_id', $customerId)
+            ->where('currency', $currency)
             ->whereIn('status', ['posted', 'partially_paid'])
             ->orderBy('invoice_date')
             ->lockForUpdate()

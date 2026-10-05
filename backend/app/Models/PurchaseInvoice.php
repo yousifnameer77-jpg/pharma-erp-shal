@@ -17,7 +17,7 @@ class PurchaseInvoice extends Model
         'company_id', 'supplier_id', 'purchase_order_id', 'goods_receipt_id',
         'invoice_number', 'supplier_invoice_number', 'invoice_date', 'due_date',
         'status', 'subtotal', 'tax_amount', 'total_amount', 'paid_amount',
-        'notes', 'created_by', 'posted_at',
+        'notes', 'created_by', 'posted_at', 'currency', 'exchange_rate',
     ];
 
     protected function casts(): array

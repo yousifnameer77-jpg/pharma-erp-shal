@@ -23,6 +23,7 @@ class SupplierPaymentService
     public function __construct(
         private readonly DocumentSequenceService $sequences,
         private readonly JournalEntryService $journalEntryService,
+        private readonly ExchangeRateService $fx,
     ) {
     }
 
@@ -32,9 +33,11 @@ class SupplierPaymentService
     public function record(array $data, User $user): SupplierPayment
     {
         $amount = (float) $data['amount'];
+        $currency = $data['currency'] ?? ExchangeRateService::BASE;
+        $rate = $this->fx->rateFor($data['company_id'], $currency, $data['payment_date']);
 
-        return DB::transaction(function () use ($data, $amount, $user) {
-            $allocations = $data['allocations'] ?? $this->autoAllocate($data['company_id'], $data['supplier_id'], $amount);
+        return DB::transaction(function () use ($data, $amount, $user, $currency, $rate) {
+            $allocations = $data['allocations'] ?? $this->autoAllocate($data['company_id'], $data['supplier_id'], $amount, $currency);
 
             $allocatedTotal = round(array_sum(array_map(fn ($a) => (float) $a['amount'], $allocations)), 3);
             if (abs($allocatedTotal - round($amount, 3)) > 0.001) {
@@ -46,6 +49,8 @@ class SupplierPaymentService
             $payment = SupplierPayment::create([
                 'company_id' => $data['company_id'],
                 'supplier_id' => $data['supplier_id'],
+                'currency' => $currency,
+                'exchange_rate' => $rate,
                 'payment_number' => $this->sequences->next($data['company_id'], 'supplier_payment', 'PAY'),
                 'payment_date' => $data['payment_date'],
                 'amount' => $amount,
@@ -56,8 +61,16 @@ class SupplierPaymentService
                 'created_by' => $user->id,
             ]);
 
+            $payableBase = 0.0;
+
             foreach ($allocations as $allocation) {
                 $invoice = PurchaseInvoice::whereKey($allocation['purchase_invoice_id'])->lockForUpdate()->firstOrFail();
+
+                if ($invoice->currency !== $currency) {
+                    throw ValidationException::withMessages([
+                        'currency' => ["Invoice {$invoice->invoice_number} is in {$invoice->currency}; a {$currency} payment cannot be applied to it."],
+                    ]);
+                }
 
                 if (! in_array($invoice->status, ['posted', 'partially_paid'], true)) {
                     throw new InvalidStatusTransitionException('purchase_invoice', $invoice->id, $invoice->status, 'paid');
@@ -75,6 +88,9 @@ class SupplierPaymentService
                     'amount' => $allocatedAmount,
                 ]);
 
+                // Payable is cleared at the rate the invoice was booked at.
+                $payableBase += $this->fx->toBase($allocatedAmount, (float) $invoice->exchange_rate);
+
                 $newPaidAmount = (float) $invoice->paid_amount + $allocatedAmount;
                 $invoice->update([
                     'paid_amount' => $newPaidAmount,
@@ -83,16 +99,28 @@ class SupplierPaymentService
             }
 
             $payableAccount = ChartOfAccount::findByCode($data['company_id'], ChartOfAccount::CODE_ACCOUNTS_PAYABLE);
+            $paidBase = $this->fx->toBase($amount, $rate);
+            $difference = round($payableBase - $paidBase, 3);
+
+            $lines = [
+                ['account_id' => $payableAccount->id, 'debit' => $payableBase, 'description' => 'Accounts payable settled'],
+                ['account_id' => $data['paid_from_account_id'], 'credit' => $paidBase, 'description' => 'Paid out'],
+            ];
+
+            // Paid fewer IQD than the payable carried = gain; more = loss.
+            if ($difference !== 0.0) {
+                $fxAccount = $this->fx->gainLossAccount($data['company_id']);
+                $lines[] = $difference > 0
+                    ? ['account_id' => $fxAccount->id, 'credit' => $difference, 'description' => 'Realized exchange gain']
+                    : ['account_id' => $fxAccount->id, 'debit' => -$difference, 'description' => 'Realized exchange loss'];
+            }
 
             $this->journalEntryService->post(
                 companyId: $data['company_id'],
                 branchId: null,
                 entryDate: $data['payment_date'],
                 description: "Supplier payment {$payment->payment_number}",
-                lines: [
-                    ['account_id' => $payableAccount->id, 'debit' => $amount, 'description' => 'Accounts payable settled'],
-                    ['account_id' => $data['paid_from_account_id'], 'credit' => $amount, 'description' => 'Paid out'],
-                ],
+                lines: $lines,
                 user: $user,
                 referenceType: 'supplier_payment',
                 referenceId: $payment->id,
@@ -109,11 +137,12 @@ class SupplierPaymentService
      *
      * @return array<int, array{purchase_invoice_id: string, amount: float}>
      */
-    private function autoAllocate(string $companyId, string $supplierId, float $amount): array
+    private function autoAllocate(string $companyId, string $supplierId, float $amount, string $currency): array
     {
         $invoices = PurchaseInvoice::query()
             ->where('company_id', $companyId)
             ->where('supplier_id', $supplierId)
+            ->where('currency', $currency)
             ->whereIn('status', ['posted', 'partially_paid'])
             ->orderBy('invoice_date')
             ->lockForUpdate()

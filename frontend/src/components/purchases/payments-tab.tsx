@@ -169,6 +169,7 @@ function PaymentFormModal({
   const [method, setMethod] = useState<PaymentMethod>("bank_transfer");
   const [accountId, setAccountId] = useState("");
   const [reference, setReference] = useState("");
+  const [currency, setCurrency] = useState("IQD");
   const [notes, setNotes] = useState("");
   const [manualAllocation, setManualAllocation] = useState(false);
   const [allocations, setAllocations] = useState<Record<string, string>>({});
@@ -197,9 +198,11 @@ function PaymentFormModal({
   const outstanding = useMemo(
     () =>
       invoices.data.filter(
-        (i) => i.status === "posted" || i.status === "partially_paid",
+        (i) =>
+          (i.status === "posted" || i.status === "partially_paid") &&
+          ((i as any).currency ?? "IQD") === currency,
       ),
-    [invoices.data],
+    [invoices.data, currency],
   );
 
   async function submit(e: React.FormEvent) {
@@ -212,6 +215,7 @@ function PaymentFormModal({
         payment_date: paymentDate,
         amount: Number(amount),
         method,
+        currency,
         paid_from_account_id: accountId,
         reference: reference || undefined,
         notes: notes || undefined,
@@ -276,6 +280,17 @@ function PaymentFormModal({
           value={paymentDate}
           onChange={(e) => setPaymentDate(e.target.value)}
         />
+        <Select
+          label="العملة / Currency"
+          value={currency}
+          onChange={(e) => {
+            setCurrency(e.target.value);
+            setAllocations({});
+          }}
+        >
+          <option value="IQD">دينار عراقي (IQD)</option>
+          <option value="USD">دولار (USD) — بسعر يوم الدفعة</option>
+        </Select>
         <Input
           label="Amount"
           type="number"

@@ -87,7 +87,7 @@ class AgingReportService
                 default => '90_plus',
             };
 
-            $amount = (float) $invoice->remaining_due;
+            $amount = (float) $invoice->remaining_due * (float) $invoice->exchange_rate; // IQD
             $groups[$partyId]['buckets'][$bucket] += $amount;
             $groups[$partyId]['total'] += $amount;
             $totals[$bucket] += $amount;

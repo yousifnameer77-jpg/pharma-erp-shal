@@ -20,7 +20,7 @@ class SupplierAccountService
         $totals = PurchaseInvoice::query()
             ->where('supplier_id', $supplier->id)
             ->whereIn('status', ['posted', 'partially_paid', 'paid'])
-            ->selectRaw('COALESCE(SUM(total_amount), 0) AS total_invoiced, COALESCE(SUM(paid_amount), 0) AS total_paid')
+            ->selectRaw('COALESCE(SUM(total_amount_base), 0) AS total_invoiced, COALESCE(SUM(paid_amount_base), 0) AS total_paid')
             ->first();
 
         $totalInvoiced = (float) $totals->total_invoiced;

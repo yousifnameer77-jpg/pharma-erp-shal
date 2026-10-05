@@ -220,6 +220,9 @@ export function ExecutiveAnalytics() {
             </div>
 
             <div className="space-y-3">
+              {!top_products?.length && (
+                <p className="py-6 text-center text-xs text-slate-400">لا توجد مبيعات مسجّلة بعد.</p>
+              )}
               {top_products?.map((item: any, idx: number) => (
                 <div key={idx} className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2.5 min-w-0">
@@ -236,10 +239,10 @@ export function ExecutiveAnalytics() {
 
                   <div className="text-left shrink-0">
                     <span className="font-black text-emerald-600 dark:text-emerald-400 font-mono block">
-                      {item.sale_price?.toLocaleString()} د.ع
+                      {Number(item.revenue ?? 0).toLocaleString()} د.ع
                     </span>
                     <span className="text-[10px] text-slate-400">
-                      {item.sales_count} عملية بيع
+                      {item.sales_count} فاتورة
                     </span>
                   </div>
                 </div>
@@ -251,12 +254,16 @@ export function ExecutiveAnalytics() {
           <div className="mt-4 pt-3.5 border-t border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between text-xs font-bold mb-2">
               <span className="text-slate-700 dark:text-slate-300">طرق الدفع والتحصيل</span>
-              <span className="text-slate-400 text-[10px]">نقدي 65% • بطاقة 20% • آجل 15%</span>
+              <span className="text-slate-400 text-[10px]">
+                {payment_split?.length
+                  ? payment_split.map((p: any) => `${p.name} ${p.value}%`).join(" • ")
+                  : "لا توجد مبيعات بعد"}
+              </span>
             </div>
             <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
-              <div style={{ width: "65%" }} className="bg-emerald-500 h-full"></div>
-              <div style={{ width: "20%" }} className="bg-cyan-500 h-full"></div>
-              <div style={{ width: "15%" }} className="bg-amber-500 h-full"></div>
+              {payment_split?.map((p: any) => (
+                <div key={p.name} style={{ width: `${p.value}%`, backgroundColor: p.color }} className="h-full"></div>
+              ))}
             </div>
           </div>
         </div>

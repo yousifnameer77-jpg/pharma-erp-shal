@@ -19,7 +19,7 @@ class CustomerPayment extends Model
 
     protected $fillable = [
         'company_id', 'customer_id', 'payment_number', 'payment_date', 'amount',
-        'method', 'received_into_account_id', 'reference', 'notes', 'created_by',
+        'method', 'received_into_account_id', 'reference', 'notes', 'created_by', 'currency', 'exchange_rate',
     ];
 
     protected function casts(): array

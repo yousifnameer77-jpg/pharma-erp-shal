@@ -31,6 +31,7 @@ class SalesReturnService
         private readonly DocumentSequenceService $sequences,
         private readonly StockMovementService $stockMovementService,
         private readonly JournalEntryService $journalEntryService,
+        private readonly ExchangeRateService $fx,
     ) {
     }
 
@@ -124,18 +125,26 @@ class SalesReturnService
 
             $totalCost = $this->costOfMovements($movements);
 
+            // A return against a foreign-currency invoice is in that currency
+            // and reverses the sale at the invoice's own rate.
+            $rate = $return->sales_invoice_id
+                ? (float) \App\Models\SalesInvoice::whereKey($return->sales_invoice_id)->value('exchange_rate')
+                : 1.0;
+            $subtotalBase = $this->fx->toBase((float) $return->subtotal, $rate);
+            $taxBase = $this->fx->toBase((float) $return->tax_amount, $rate);
+
             $lines = [];
             $arAccount = ChartOfAccount::findByCode($return->company_id, ChartOfAccount::CODE_ACCOUNTS_RECEIVABLE);
-            $lines[] = ['account_id' => $arAccount->id, 'credit' => (float) $return->total_amount, 'description' => 'Accounts receivable reduced'];
+            $lines[] = ['account_id' => $arAccount->id, 'credit' => $subtotalBase + $taxBase, 'description' => 'Accounts receivable reduced'];
 
             if ((float) $return->subtotal > 0) {
                 $revenueAccount = ChartOfAccount::findByCode($return->company_id, ChartOfAccount::CODE_REVENUE);
-                $lines[] = ['account_id' => $revenueAccount->id, 'debit' => (float) $return->subtotal, 'description' => 'Sales revenue reversed'];
+                $lines[] = ['account_id' => $revenueAccount->id, 'debit' => $subtotalBase, 'description' => 'Sales revenue reversed'];
             }
 
             if ((float) $return->tax_amount > 0) {
                 $taxAccount = ChartOfAccount::findByCode($return->company_id, ChartOfAccount::CODE_TAX_OUTPUT);
-                $lines[] = ['account_id' => $taxAccount->id, 'debit' => (float) $return->tax_amount, 'description' => 'Sales tax payable reversed'];
+                $lines[] = ['account_id' => $taxAccount->id, 'debit' => $taxBase, 'description' => 'Sales tax payable reversed'];
             }
 
             if ($totalCost > 0) {

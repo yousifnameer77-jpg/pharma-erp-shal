@@ -18,7 +18,7 @@ class SalesInvoice extends Model
         'company_id', 'branch_id', 'warehouse_id', 'customer_id',
         'invoice_number', 'invoice_date', 'due_date', 'status',
         'subtotal', 'discount_amount', 'tax_amount', 'total_amount', 'paid_amount',
-        'notes', 'created_by', 'posted_at',
+        'notes', 'created_by', 'posted_at', 'currency', 'exchange_rate',
     ];
 
     protected function casts(): array

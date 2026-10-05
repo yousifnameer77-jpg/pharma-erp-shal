@@ -25,6 +25,7 @@ class StoreSalesInvoiceRequest extends FormRequest
             'warehouse_id' => ['required', 'uuid', 'exists:warehouses,id'],
             'customer_id' => ['required', 'uuid', 'exists:customers,id'],
             'invoice_date' => ['required', 'date'],
+            'currency' => ['nullable', 'in:IQD,USD'],
             'due_date' => ['nullable', 'date', 'after_or_equal:invoice_date'],
             'notes' => ['nullable', 'string'],
             'items' => ['required', 'array', 'min:1'],

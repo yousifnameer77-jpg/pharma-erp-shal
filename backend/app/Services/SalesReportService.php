@@ -36,7 +36,7 @@ class SalesReportService
             'total_subtotal' => (float) $invoices->sum('subtotal'),
             'total_discount' => (float) $invoices->sum('discount_amount'),
             'total_tax' => (float) $invoices->sum('tax_amount'),
-            'total_revenue' => (float) $invoices->sum('total_amount'),
+            'total_revenue' => (float) $invoices->sum('total_amount_base'),
         ];
     }
 
@@ -53,7 +53,7 @@ class SalesReportService
             ->get([
                 'invoice_date',
                 DB::raw('COUNT(*) AS invoice_count'),
-                DB::raw('COALESCE(SUM(total_amount), 0) AS total_revenue'),
+                DB::raw('COALESCE(SUM(total_amount_base), 0) AS total_revenue'),
             ]);
 
         $days = $rows->map(fn ($row) => [
@@ -83,7 +83,7 @@ class SalesReportService
             ->get([
                 'branch_id',
                 DB::raw('COUNT(*) AS invoice_count'),
-                DB::raw('COALESCE(SUM(total_amount), 0) AS total_revenue'),
+                DB::raw('COALESCE(SUM(total_amount_base), 0) AS total_revenue'),
             ]);
 
         // groupBy + a raw aggregate select can't eager-load via with(), so

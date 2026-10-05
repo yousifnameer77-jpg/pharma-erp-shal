@@ -23,6 +23,7 @@ class StoreCustomerPaymentRequest extends FormRequest
             'company_id' => ['required', 'uuid', 'exists:companies,id'],
             'customer_id' => ['required', 'uuid', 'exists:customers,id'],
             'payment_date' => ['required', 'date'],
+            'currency' => ['nullable', 'in:IQD,USD'],
             'amount' => ['required', 'numeric', 'gt:0'],
             'method' => ['required', 'in:cash,bank_transfer,cheque,card,other'],
             'received_into_account_id' => ['required', 'uuid', 'exists:chart_of_accounts,id'],

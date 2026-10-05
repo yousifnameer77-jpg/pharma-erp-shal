@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\ChartOfAccountController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\CustomerPaymentController;
+use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\ExpenseController;
 use App\Http\Controllers\Api\GoodsReceiptController;
 use App\Http\Controllers\Api\JournalEntryController;
@@ -249,6 +250,11 @@ Route::prefix('v1')->group(function () {
         Route::post('/expenses/{expense}/cancel', [ExpenseController::class, 'cancel'])->middleware('permission:finance.manage');
 
         // Reports — all read-only, all computed on demand (see AccountingReportController's docblock).
+        // Manual daily USD->IQD rates; reading needs the journal-view permission, writing needs finance.manage.
+        Route::get('/exchange-rates', [ExchangeRateController::class, 'index'])->middleware('permission:finance.journal.view');
+        Route::get('/exchange-rates/current', [ExchangeRateController::class, 'current'])->middleware('permission:finance.journal.view');
+        Route::post('/exchange-rates', [ExchangeRateController::class, 'store'])->middleware('permission:finance.manage');
+
         Route::get('/accounting/general-ledger', [AccountingReportController::class, 'generalLedger'])->middleware('permission:finance.journal.view');
         Route::get('/accounting/general-ledger/{chartOfAccount}', [AccountingReportController::class, 'accountLedger'])->middleware('permission:finance.journal.view');
         Route::get('/accounting/cash', [AccountingReportController::class, 'cash'])->middleware('permission:finance.journal.view');

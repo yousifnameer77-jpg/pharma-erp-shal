@@ -25,6 +25,7 @@ class PurchaseInvoiceService
     public function __construct(
         private readonly DocumentSequenceService $sequences,
         private readonly JournalEntryService $journalEntryService,
+        private readonly ExchangeRateService $fx,
     ) {
     }
 
@@ -34,7 +35,11 @@ class PurchaseInvoiceService
     public function create(array $data, User $user): PurchaseInvoice
     {
         return DB::transaction(function () use ($data, $user) {
+            $currency = $data['currency'] ?? ExchangeRateService::BASE;
+
             $invoice = PurchaseInvoice::create([
+                'currency' => $currency,
+                'exchange_rate' => $this->fx->rateFor($data['company_id'], $currency, $data['invoice_date']),
                 'company_id' => $data['company_id'],
                 'supplier_id' => $data['supplier_id'],
                 'purchase_order_id' => $data['purchase_order_id'] ?? null,
@@ -84,6 +89,12 @@ class PurchaseInvoiceService
         return DB::transaction(function () use ($invoice, $user) {
             $invoice = PurchaseInvoice::with('items')->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
 
+            // Ledger is always IQD: convert at the invoice rate; payable is
+            // the sum of the converted parts so the entry balances exactly.
+            $rate = (float) $invoice->exchange_rate;
+            $subtotalBase = $this->fx->toBase((float) $invoice->subtotal, $rate);
+            $taxBase = $this->fx->toBase((float) $invoice->tax_amount, $rate);
+
             $lines = [];
 
             $clearingAccount = $invoice->goods_receipt_id
@@ -91,16 +102,16 @@ class PurchaseInvoiceService
                 : ChartOfAccount::findByCode($invoice->company_id, ChartOfAccount::CODE_INVENTORY);
 
             if ((float) $invoice->subtotal > 0) {
-                $lines[] = ['account_id' => $clearingAccount->id, 'debit' => (float) $invoice->subtotal, 'description' => 'Invoice subtotal'];
+                $lines[] = ['account_id' => $clearingAccount->id, 'debit' => $subtotalBase, 'description' => 'Invoice subtotal'];
             }
 
             if ((float) $invoice->tax_amount > 0) {
                 $taxAccount = ChartOfAccount::findByCode($invoice->company_id, ChartOfAccount::CODE_TAX_INPUT);
-                $lines[] = ['account_id' => $taxAccount->id, 'debit' => (float) $invoice->tax_amount, 'description' => 'Purchase tax input'];
+                $lines[] = ['account_id' => $taxAccount->id, 'debit' => $taxBase, 'description' => 'Purchase tax input'];
             }
 
             $payableAccount = ChartOfAccount::findByCode($invoice->company_id, ChartOfAccount::CODE_ACCOUNTS_PAYABLE);
-            $lines[] = ['account_id' => $payableAccount->id, 'credit' => (float) $invoice->total_amount, 'description' => 'Accounts payable'];
+            $lines[] = ['account_id' => $payableAccount->id, 'credit' => $subtotalBase + $taxBase, 'description' => 'Accounts payable'];
 
             if ($lines !== []) {
                 $this->journalEntryService->post(

@@ -23,6 +23,7 @@ class StoreSupplierPaymentRequest extends FormRequest
             'company_id' => ['required', 'uuid', 'exists:companies,id'],
             'supplier_id' => ['required', 'uuid', 'exists:suppliers,id'],
             'payment_date' => ['required', 'date'],
+            'currency' => ['nullable', 'in:IQD,USD'],
             'amount' => ['required', 'numeric', 'gt:0'],
             'method' => ['required', 'in:cash,bank_transfer,cheque,card,other'],
             'paid_from_account_id' => ['required', 'uuid', 'exists:chart_of_accounts,id'],

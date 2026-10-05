@@ -20,6 +20,7 @@ class StorePurchaseInvoiceRequest extends FormRequest
             'goods_receipt_id' => ['nullable', 'uuid', 'exists:goods_receipts,id'],
             'supplier_invoice_number' => ['nullable', 'string', 'max:50'],
             'invoice_date' => ['required', 'date'],
+            'currency' => ['nullable', 'in:IQD,USD'],
             'due_date' => ['nullable', 'date', 'after_or_equal:invoice_date'],
             'notes' => ['nullable', 'string'],
             'items' => ['required', 'array', 'min:1'],
