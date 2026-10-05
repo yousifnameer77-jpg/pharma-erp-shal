@@ -1,9 +1,15 @@
 cloudflared.exe
 .env
 .env.local
+.env.*.local
 node_modules/
 vendor/
 .next/
 *.log
 *.sqlite
+backend/bootstrap/cache/*.php
 backend/storage/framework/cache/data/
+backend/storage/framework/views/*.php
+backend/storage/framework/sessions/*
+backend/storage/logs/*
+backups/

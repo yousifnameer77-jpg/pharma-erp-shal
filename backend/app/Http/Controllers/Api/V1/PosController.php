@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Batch;
+use App\Models\ChartOfAccount;
 use App\Models\Customer;
 use App\Models\CustomerPayment;
 use App\Models\PrescriptionRecord;
@@ -13,6 +14,7 @@ use App\Models\SalesInvoice;
 use App\Models\SalesInvoiceItem;
 use App\Models\Stock;
 use App\Services\DocumentSequenceService;
+use App\Services\JournalEntryService;
 use App\Services\StockMovementService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -208,39 +210,48 @@ class PosController extends Controller
                 'posted_at' => Carbon::now(),
             ]);
 
-            // Create Line Items and Deduct Stock via FEFO
+            // Deduct stock through StockMovementService: it row-locks, picks
+            // FEFO (or the chosen batch), refuses expired/insufficient stock
+            // and writes the append-only movement ledger. A failure throws and
+            // rolls the whole checkout back — nothing is sold that isn't there.
+            $allMovements = collect();
+
             foreach ($itemsData as $row) {
-                // Deduct stock using FEFO or specific batch
-                $batchId = $row['batch_id'];
-                if (!$batchId) {
-                    $earliestBatch = Batch::where('product_id', $row['product']->id)
-                        ->where('expiry_date', '>', Carbon::today())
-                        ->whereHas('stock', function ($q) use ($warehouseId) {
-                            $q->where('warehouse_id', $warehouseId)->where('quantity_on_hand', '>', 0);
-                        })
-                        ->orderBy('expiry_date', 'asc')
-                        ->first();
-                    $batchId = $earliestBatch?->id;
-                }
-
-                if ($batchId && $warehouseId) {
-                    $stock = Stock::where('batch_id', $batchId)->where('warehouse_id', $warehouseId)->first();
-                    if ($stock && $stock->quantity_on_hand >= $row['quantity']) {
-                        $stock->decrement('quantity_on_hand', $row['quantity']);
-                    }
-                }
-
-                SalesInvoiceItem::create([
-                    'sales_invoice_id' => $invoice->id,
+                $movements = $this->stockMovements->recordSale([
                     'product_id' => $row['product']->id,
-                    'batch_id' => $batchId,
+                    'batch_id' => $row['batch_id'],
+                    'warehouse_id' => $warehouseId,
                     'quantity' => $row['quantity'],
-                    'unit_price' => $row['unit_price'],
-                    'tax_rate' => $row['product']->tax_rate ?? 0,
-                    'discount_rate' => 0,
-                    'line_total' => $row['subtotal'],
-                ]);
+                    'reference_type' => 'sales_invoice',
+                    'reference_id' => $invoice->id,
+                    'notes' => "POS sale {$invoiceNumber}",
+                ], $user);
+
+                $allMovements = $allMovements->merge($movements);
+
+                // One invoice line per batch drawn, so returns can target the right batch.
+                $remaining = $row['subtotal'];
+                $count = $movements->count();
+                foreach ($movements->values() as $i => $movement) {
+                    $lineTotal = $i === $count - 1
+                        ? round($remaining, 2)
+                        : round((float) $movement->quantity * $row['unit_price'], 2);
+                    $remaining -= $lineTotal;
+
+                    SalesInvoiceItem::create([
+                        'sales_invoice_id' => $invoice->id,
+                        'product_id' => $row['product']->id,
+                        'batch_id' => $movement->batch_id,
+                        'quantity' => $movement->quantity,
+                        'unit_price' => $row['unit_price'],
+                        'tax_rate' => $row['product']->tax_rate ?? 0,
+                        'discount_rate' => 0,
+                        'line_total' => $lineTotal,
+                    ]);
+                }
             }
+
+            $this->postJournal($invoice, $allMovements, $validated['payment_method'], $user);
 
             // Save Prescription Records if controlled
             $savedPrescriptions = [];
@@ -316,6 +327,50 @@ class PosController extends Controller
                 ],
             ]);
         });
+    }
+
+    /**
+     * Revenue/COGS journal entry for a POS sale. Cash sales debit Cash, card
+     * sales debit the Bank account, debt sales debit Accounts Receivable.
+     */
+    private function postJournal(SalesInvoice $invoice, $movements, string $method, $user): void
+    {
+        $companyId = $invoice->company_id;
+        $batchCosts = Batch::whereIn('id', $movements->pluck('batch_id')->unique())->pluck('purchase_price', 'id');
+        $totalCost = (float) $movements->sum(fn ($m) => (float) $m->quantity * (float) ($batchCosts[$m->batch_id] ?? 0));
+        $netRevenue = (float) $invoice->subtotal - (float) $invoice->discount_amount;
+
+        $debitCode = match ($method) {
+            'cash' => ChartOfAccount::CODE_CASH,
+            'card' => ChartOfAccount::CODE_BANK,
+            default => ChartOfAccount::CODE_ACCOUNTS_RECEIVABLE,
+        };
+
+        $lines = [];
+        if ((float) $invoice->total_amount > 0) {
+            $lines[] = ['account_id' => ChartOfAccount::findByCode($companyId, $debitCode)->id, 'debit' => (float) $invoice->total_amount, 'description' => 'POS sale'];
+        }
+        if ($netRevenue > 0) {
+            $lines[] = ['account_id' => ChartOfAccount::findByCode($companyId, ChartOfAccount::CODE_REVENUE)->id, 'credit' => $netRevenue, 'description' => 'Sales revenue'];
+        }
+        if ((float) $invoice->tax_amount > 0) {
+            $lines[] = ['account_id' => ChartOfAccount::findByCode($companyId, ChartOfAccount::CODE_TAX_OUTPUT)->id, 'credit' => (float) $invoice->tax_amount, 'description' => 'Sales tax payable'];
+        }
+        if ($totalCost > 0) {
+            $lines[] = ['account_id' => ChartOfAccount::findByCode($companyId, ChartOfAccount::CODE_COGS)->id, 'debit' => $totalCost, 'description' => 'Cost of goods sold'];
+            $lines[] = ['account_id' => ChartOfAccount::findByCode($companyId, ChartOfAccount::CODE_INVENTORY)->id, 'credit' => $totalCost, 'description' => 'Stock sold'];
+        }
+
+        app(JournalEntryService::class)->post(
+            companyId: $companyId,
+            branchId: $invoice->branch_id,
+            entryDate: $invoice->invoice_date->toDateString(),
+            description: "POS sale {$invoice->invoice_number}",
+            lines: $lines,
+            user: $user,
+            referenceType: 'sales_invoice',
+            referenceId: $invoice->id,
+        );
     }
 
     /**

@@ -122,7 +122,7 @@ class SahlAlHadharatSeeder extends Seeder
         );
 
         // 6. Users & Scoped RBAC
-        $password = 'Passw0rd!';
+        $password = SeedPassword::resolve();
 
         // 6.1 Super Admin (المدير العام)
         $admin = User::updateOrCreate(

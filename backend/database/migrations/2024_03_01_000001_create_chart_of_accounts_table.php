@@ -15,7 +15,7 @@ return new class extends Migration
             $table->string('code', 30);
             $table->string('name', 150);
             $table->string('type', 20);
-            $table->foreignUuid('parent_id')->nullable()->constrained('chart_of_accounts')->nullOnDelete();
+            $table->uuid('parent_id')->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamps();
 

@@ -30,9 +30,7 @@ echo  System started successfully!
 echo  Backend:  http://localhost:8000/api/v1
 echo  Frontend: http://localhost:3000
 echo.
-echo  Default Login:
-echo  Username: admin
-echo  Password: Passw0rd!
+echo  Login: admin (password = SEED_DEFAULT_PASSWORD from backend\.env)
 echo ===================================================
 echo Press any key to close this launcher window...
 pause >nul

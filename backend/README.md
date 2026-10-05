@@ -58,7 +58,7 @@ Seeding creates one login you can test with immediately:
 
 | username | password  |
 | -------- | --------- |
-| `admin`  | `Passw0rd!` |
+| `admin`  | `SEED_DEFAULT_PASSWORD` (local default `Passw0rd!`) |
 
 Change or remove this in `DatabaseSeeder` before any real deployment.
 

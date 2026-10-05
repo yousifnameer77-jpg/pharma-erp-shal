@@ -35,7 +35,7 @@ class DatabaseSeeder extends Seeder
             [
                 'branch_id' => $branch->id,
                 'email' => 'admin@example.com',
-                'password' => 'Passw0rd!',
+                'password' => SeedPassword::resolve(),
                 'full_name' => 'System Administrator',
                 'is_active' => true,
             ],
