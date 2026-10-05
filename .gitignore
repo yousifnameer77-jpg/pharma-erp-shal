@@ -1,0 +1,9 @@
+cloudflared.exe
+.env
+.env.local
+node_modules/
+vendor/
+.next/
+*.log
+*.sqlite
+backend/storage/framework/cache/data/
