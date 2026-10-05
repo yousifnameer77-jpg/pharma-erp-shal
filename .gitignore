@@ -13,3 +13,5 @@ backend/storage/framework/views/*.php
 backend/storage/framework/sessions/*
 backend/storage/logs/*
 backups/
+.phpunit.result.cache
+*.tsbuildinfo
