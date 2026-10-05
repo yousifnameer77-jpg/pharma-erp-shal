@@ -18,12 +18,11 @@ return [
     |
     */
 
-    'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', sprintf(
-        '%s%s',
-        'localhost,localhost:3000,127.0.0.1,127.0.0.1:8000,::1',
-        Sanctum::currentApplicationUrlWithPort(),
-        // Sanctum::currentRequestHost(),
-    ))),
+    // The Next.js frontend authenticates with Bearer tokens, not session
+    // cookies, so no domain is "stateful" by default (stateful mode would
+    // demand a CSRF cookie on login and answer 419). Set the env var only if
+    // you switch to cookie-based SPA auth.
+    'stateful' => array_filter(explode(',', (string) env('SANCTUM_STATEFUL_DOMAINS', ''))),
 
     /*
     |--------------------------------------------------------------------------

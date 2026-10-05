@@ -515,7 +515,7 @@ export default function PosPage() {
                                 : "text-slate-500 dark:text-slate-400"
                             }`}
                           >
-                            {earliestBatch.expiry_date}
+                            {earliestBatch.expiry_date.slice(0, 10)}
                           </span>
                         </div>
                       )}
